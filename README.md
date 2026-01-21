@@ -38,6 +38,12 @@ Alternatively, you can directly access a file by appending the file parameter to
 index.php?file=path/to/your/markdown/file.md
 ```
 
+For browsing multiple markdown files in a directory, use the selector.php script:
+1. Access `selector.php` through your web browser
+2. Enter the path to a folder containing markdown files
+3. Click "Show Directory Tree" to view a hierarchical tree of all markdown files
+4. Click on any markdown file to open it in the viewer
+
 ## Sample File
 
 The project includes a sample LLM response file (`sample-llm-response.md`) demonstrating various syntax elements.

@@ -17,25 +17,24 @@ class LlmMarkdownParser
         // Convert headers
         $markdown = preg_replace_callback('/^(#{1,6})\s+(.*)$/m', function($matches) {
             $level = strlen($matches[1]); // Count the number of # symbols
-            return '<h' . $level . '>' . $matches[2] . '</h' . $level . '>';
+            return '<h' . $level . '>' . htmlspecialchars($matches[2]) . '</h' . $level . '>';
         }, $markdown);
-        
+
         // Handle horizontal rules first to avoid conflicts with emphasis
         $markdown = $this->parseHorizontalRules($markdown);
 
-        // Handle code blocks (properly match code blocks with language specification) - do this BEFORE inline code
-        if ($markdown !== null) {
-            // Use a pattern that properly handles multiple code blocks in sequence
-            $markdown = preg_replace_callback('/^```(\w+)?[\n\r]+((?:(?!^[\t ]*```[\n\r]).)*?)[\n\r]*^[\t ]*```[\n\r]*/sm', function($matches) {
-                $language = !empty($matches[1]) ? $matches[1] : '';
-                $code = htmlspecialchars($matches[2]);
-                if (!empty($language)) {
-                    return "<pre><code class=\"language-$language\">" . trim($code) . "</code></pre>";
-                } else {
-                    return "<pre><code>" . trim($code) . "</code></pre>";
-                }
-            }, $markdown);
-        }
+        // Handle fenced code blocks (before any other processing that might interfere)
+        $markdown = preg_replace_callback('/^[\t ]*```([\w\-]+)?[\n\r]+((?:(?![\t ]*```[\n\r]).)*?)[\n\r]*[\t ]*```[\n\r]*/sm', function($matches) {
+            $language = !empty($matches[1]) ? $matches[1] : '';
+            $code = htmlspecialchars($matches[2], ENT_NOQUOTES); // ENT_NOQUOTES preserves quotes for attributes
+            // Line breaks are preserved automatically by htmlspecialchars() and displayed by <pre> tag
+            $code = trim($code);
+            if (!empty($language)) {
+                return "<pre><code class=\"language-$language\">" . $code . "</code></pre>";
+            } else {
+                return "<pre><code>" . $code . "</code></pre>";
+            }
+        }, $markdown);
 
         // Handle bold and italic
         // Bold: **text** or __text__
@@ -45,7 +44,7 @@ class LlmMarkdownParser
         $markdown = $markdown !== null ? preg_replace('/\*(.*?)\*/', '<em>$1</em>', $markdown) : '';
         $markdown = $markdown !== null ? preg_replace('/_(.*?)_/', '<em>$1</em>', $markdown) : '';
 
-        // Handle inline code (after code blocks to avoid conflicts)
+        // Handle inline code (after fenced code blocks to avoid conflicts)
         $markdown = $markdown !== null ? preg_replace('/`(.*?)`/', '<code>$1</code>', $markdown) : '';
 
         // Handle images (with optional title) - do this BEFORE links to avoid conflicts
@@ -71,12 +70,14 @@ class LlmMarkdownParser
         $markdown = $this->parseBlockquotes($markdown);
 
         // Handle lists - improved logic to handle nested lists based on indentation and preserve ordered list numbers
+        // Merge consecutive lines with same indentation under the same list item
         // First, let's parse the lines to identify all list items and their hierarchy
         $lines = explode("\n", $markdown);
         $processedLines = [];
         $listItems = [];
 
-        foreach ($lines as $line) {
+        for ($i = 0; $i < count($lines); $i++) {
+            $line = $lines[$i];
             $originalLine = $line;
             $indentLevel = 0;
 
@@ -88,9 +89,37 @@ class LlmMarkdownParser
 
             // Check for unordered list item
             if (preg_match('/^-\s+(.+)$/', $trimmedLine, $matches)) {
+                $content = $matches[1];
+
+                // Check if next lines have the same indentation and are not list items themselves
+                $j = $i + 1;
+                while ($j < count($lines)) {
+                    $nextLine = $lines[$j];
+                    $nextLeadingWhitespace = strlen($nextLine) - strlen(ltrim($nextLine, " \t"));
+                    $nextIndentLevel = floor($nextLeadingWhitespace / 2);
+
+                    $nextTrimmedLine = ltrim($nextLine);
+
+                    // If the next line is empty, stop merging (represents paragraph break)
+                    if (trim($nextLine) === '') {
+                        break;
+                    }
+                    // If the next line has the same or greater indentation AND is not a list item, merge it
+                    // Using >= to account for lines that might have slightly more indentation
+                    elseif ($nextIndentLevel >= $indentLevel && !preg_match('/^-\s+/', $nextTrimmedLine) && !preg_match('/^\d+\.\s+/', $nextTrimmedLine)) {
+                        $content .= " " . trim($nextLine);
+                        $j++;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Update i to skip the merged lines
+                $i = $j - 1;
+
                 $listItems[] = [
                     'type' => 'ul',
-                    'content' => $matches[1],
+                    'content' => $content,
                     'indent' => $indentLevel,
                     'original' => $originalLine,
                     'number' => null  // For unordered lists
@@ -98,9 +127,37 @@ class LlmMarkdownParser
             }
             // Check for ordered list item
             elseif (preg_match('/^(\d+)\.\s+(.+)$/', $trimmedLine, $matches)) {
+                $content = $matches[2];
+
+                // Check if next lines have the same indentation and are not list items themselves
+                $j = $i + 1;
+                while ($j < count($lines)) {
+                    $nextLine = $lines[$j];
+                    $nextLeadingWhitespace = strlen($nextLine) - strlen(ltrim($nextLine, " \t"));
+                    $nextIndentLevel = floor($nextLeadingWhitespace / 2);
+
+                    $nextTrimmedLine = ltrim($nextLine);
+
+                    // If the next line is empty, stop merging (represents paragraph break)
+                    if (trim($nextLine) === '') {
+                        break;
+                    }
+                    // If the next line has the same or greater indentation AND is not a list item, merge it
+                    // Using >= to account for lines that might have slightly more indentation
+                    elseif ($nextIndentLevel >= $indentLevel && !preg_match('/^-\s+/', $nextTrimmedLine) && !preg_match('/^\d+\.\s+/', $nextTrimmedLine)) {
+                        $content .= " " . trim($nextLine);
+                        $j++;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Update i to skip the merged lines
+                $i = $j - 1;
+
                 $listItems[] = [
                     'type' => 'ol',
-                    'content' => $matches[2],
+                    'content' => $content,
                     'indent' => $indentLevel,
                     'original' => $originalLine,
                     'number' => $matches[1]  // For ordered lists
@@ -123,7 +180,7 @@ class LlmMarkdownParser
         }
 
         $markdown = implode("\n", $processedLines);
-        
+
         // Handle paragraphs
         $markdown = $markdown ?? '';
         $paragraphs = explode("\n\n", $markdown);
@@ -445,9 +502,6 @@ if (php_sapi_name() !== 'cli') {
     // Parse the markdown content
     $htmlContent = $parser->parse($markdownContent ?? '');
     $htmlContent = $parser->parseLlmSyntax($htmlContent ?? '');
-
-    // Sanitize output
-    $htmlContent = htmlspecialchars_decode($htmlContent ?? '');
 }
 ?>
 
